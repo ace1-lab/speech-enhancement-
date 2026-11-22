@@ -1,0 +1,14 @@
+{
+  "model_name": "DeepFilterNet3",
+  "post_filter": false,
+  "hop_ms": 40,
+  "context_ms": 300,
+  "lookahead_ms": 40,
+  "input_device": -1,
+  "output_dir": "C:\\Users\\Tanmai Dixit\\Documents\\tactical_se\\tactical_se\\outputs",
+  "target_stoi": 0.85,
+  "target_pesq": 2.5,
+  "target_latency_ms": 100.0,
+  "manifest": "C:\\Users\\Tanmai Dixit\\Documents\\tactical_se\\tactical_se\\data\\manifest_test.csv",
+  "results_csv": "C:\\Users\\Tanmai Dixit\\Documents\\tactical_se\\tactical_se\\results\\benchmark_results.csv"
+}
