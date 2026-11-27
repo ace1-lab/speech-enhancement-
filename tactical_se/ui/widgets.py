@@ -136,16 +136,50 @@ class PlayerBar(QFrame):
 
 
 class _Signals(QObject):
-    done = Signal(object); error = Signal(str); progress = Signal(int, int)
+    done = Signal(object)
+    error = Signal(str)
+    progress = Signal(int, int)
+    progress_info = Signal(int, int, str)
+    log = Signal(str)
 
 
 class Worker(QRunnable):
-    """Run fn(progress_cb) off the GUI thread."""
+    """Run fn(progress_cb, log_cb) off the GUI thread."""
     def __init__(self, fn):
-        super().__init__(); self.fn, self.sig = fn, _Signals()
+        super().__init__()
+        self.fn = fn
+        self.sig = _Signals()
+        self.setAutoDelete(False)
 
     def run(self):
         try:
-            self.sig.done.emit(self.fn(lambda d, t: self.sig.progress.emit(d, t)))
+            def p_cb(d, t, *args):
+                try:
+                    self.sig.progress.emit(d, t)
+                    if args:
+                        self.sig.progress_info.emit(d, t, str(args[0]))
+                except RuntimeError:
+                    pass
+
+            def l_cb(text):
+                try:
+                    self.sig.log.emit(str(text))
+                except RuntimeError:
+                    pass
+
+            import inspect
+            sig = inspect.signature(self.fn)
+            if len(sig.parameters) >= 2:
+                res = self.fn(p_cb, l_cb)
+            else:
+                res = self.fn(p_cb)
+            try:
+                self.sig.done.emit(res)
+            except RuntimeError:
+                pass
         except Exception as e:                                   # surfaced in the UI, never a crash
-            import traceback; traceback.print_exc(); self.sig.error.emit(f"{type(e).__name__}: {e}")
+            import traceback; traceback.print_exc()
+            try:
+                self.sig.error.emit(f"{type(e).__name__}: {e}")
+            except RuntimeError:
+                pass

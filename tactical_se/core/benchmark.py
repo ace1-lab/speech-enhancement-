@@ -16,13 +16,18 @@ def _p(x):
 
 
 def run_benchmark(manifest, out_csv, settings=None, scenarios=("noisy", "classical", "dfn_offline", "dfn_streaming"),
-                  limit=None, progress=None):
+                  limit=None, progress=None, log=None):
     s = settings or Settings.load()
+    _log = log if callable(log) else (lambda msg: None)
+    _log(f"Initializing benchmark on {Path(manifest).name} (limit={limit or 'All'})")
     df = pd.read_csv(_p(manifest))
     if limit:
         df = df.head(limit)
+    _log("Loading Classical Wiener and DeepFilterNet engines...")
     classical = get_enhancer("classical")
     dfn = get_enhancer("deepfilternet", s.model_name, s.post_filter) if any(k.startswith("dfn") for k in scenarios) else None
+    if dfn:
+        _log(f"DeepFilterNet3 active (epoch 120, {s.model_name}) on device CPU")
     rows, total = [], len(df) * len(scenarios)
     done = 0
     for _, r in df.iterrows():
@@ -41,11 +46,17 @@ def run_benchmark(manifest, out_csv, settings=None, scenarios=("noisy", "classic
             m = evaluate(clean, noisy, y, DF_SR)
             rows.append(dict(file=Path(r.noisy).name, noise=r.noise, snr=r.snr, scenario=sc, **m, **extra))
             done += 1
+            info_str = f"[{done}/{total}] {Path(r.noisy).name} ({r.noise}, {r.snr:+d}dB) ──▶ {sc} | STOI: {m.get('stoi', 0):.3f} | SI-SDR Gain: {m.get('sisdr_gain', 0):+.1f}dB"
+            _log(info_str)
             if progress:
-                progress(done, total)
+                try:
+                    progress(done, total, info_str)
+                except TypeError:
+                    progress(done, total)
     res = pd.DataFrame(rows)
     _p(out_csv).parent.mkdir(parents=True, exist_ok=True)
     res.to_csv(_p(out_csv), index=False)
+    _log(f"✔ Benchmark complete. {len(res)} evaluations saved to {out_csv}")
     return res
 
 

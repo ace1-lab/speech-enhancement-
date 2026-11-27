@@ -1,15 +1,49 @@
 """Enhancement page: load/simulate -> enhance -> compare (waveform, spectrogram, playback) -> metrics -> export."""
+import re
 from pathlib import Path
 import numpy as np
+import pandas as pd
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QComboBox, QSpinBox,
                                QCheckBox, QFileDialog, QProgressBar, QFrame, QScrollArea)
+from core.config import ROOT
 from core.audio_io import load_audio, save_wav, DF_SR, AudioValidationError
 from core.noise_sim import generate_tactical, mix_at_snr, KINDS
 from core.enhancer import stream_process, timed_offline
 from core.metrics import evaluate
 from .widgets import page_header, Card, WaveformPlot, SpectrogramCanvas, PlayerBar, Worker
 from .theme import C
+
+
+def find_clean_reference(path):
+    p = Path(path)
+    name = p.stem
+    if "demo" in p.parts or name.startswith("demo_"):
+        m = re.match(r"(demo_\d+)", name)
+        if m:
+            for cand in [p.parent.parent / "clean" / f"{m.group(1)}.wav",
+                         ROOT / "data" / "demo" / "clean" / f"{m.group(1)}.wav"]:
+                if cand.exists():
+                    return cand
+    m = re.match(r"((?:dev|test)_[^_]+_\d+)", name)
+    if m:
+        for cand in [p.parent.parent / "clean" / f"{m.group(1)}.wav",
+                     ROOT / "data" / "clean" / f"{m.group(1)}.wav"]:
+            if cand.exists():
+                return cand
+    for man_name in ["manifest_test.csv", "manifest_dev.csv", "manifest_demo.csv"]:
+        man_path = ROOT / "data" / man_name
+        if man_path.exists():
+            try:
+                df = pd.read_csv(man_path)
+                match = df[df["noisy"].str.replace("\\", "/").str.endswith(p.name)]
+                if not match.empty:
+                    clean_cand = ROOT / match.iloc[0]["clean"]
+                    if clean_cand.exists():
+                        return clean_cand
+            except Exception:
+                pass
+    return None
 
 
 class EnhancementPage(QWidget):
@@ -67,8 +101,21 @@ class EnhancementPage(QWidget):
         except AudioValidationError as e:
             self._say(f"✖ {e}", False); return
         self.src, self.src_name, self.clean = x, Path(p).name, None
-        self.file_lbl.setText(f"{self.src_name}\n{info.samplerate} Hz · {info.subtype} · {info.duration:.1f}s → 48 kHz mono")
-        self._say("✔ File validated" + ("" if info.samplerate == DF_SR else f" (resampled from {info.samplerate} Hz)"))
+        clean_file = find_clean_reference(p)
+        msg_suffix = ""
+        if clean_file and Path(clean_file).exists():
+            try:
+                c_audio, _ = load_audio(clean_file, DF_SR, norm=False)
+                if abs(len(c_audio) - len(x)) < DF_SR * 0.5:
+                    self.clean = c_audio
+                    msg_suffix = f" · Auto-paired clean ref: {clean_file.name}"
+                else:
+                    self.clean = None
+            except Exception:
+                self.clean = None
+        ref_text = f"\nClean ref: {clean_file.name}" if self.clean is not None else ""
+        self.file_lbl.setText(f"{self.src_name}\n{info.samplerate} Hz · {info.subtype} · {info.duration:.1f}s → 48 kHz mono{ref_text}")
+        self._say("✔ File validated" + ("" if info.samplerate == DF_SR else f" (resampled from {info.samplerate} Hz)") + msg_suffix)
 
     def use_recording(self):
         if self.state.recording is not None:
@@ -109,15 +156,19 @@ class EnhancementPage(QWidget):
             return y, stats, evaluate(clean, noisy, y, DF_SR)
 
         self.btn_run.setEnabled(False); self.busy.setRange(0, 0); self._say("Loading model & processing…")
-        w = Worker(job); w.sig.done.connect(lambda res: self._done(res, eng_name, streaming)); w.sig.error.connect(self._fail)
-        QThreadPool.globalInstance().start(w)
+        self._worker = Worker(job)
+        self._worker.sig.done.connect(lambda res: self._done(res, eng_name, streaming))
+        self._worker.sig.error.connect(self._fail)
+        QThreadPool.globalInstance().start(self._worker)
 
     def _fail(self, e):
+        self._worker = None
         self.busy.setRange(0, 1); self.btn_run.setEnabled(True)
         hint = " Install it with: pip install deepfilternet" if "df" in e.lower() or "deepfilter" in e.lower() else ""
         self._say(f"✖ {e}.{hint}", False)
 
     def _done(self, res, eng, streaming):
+        self._worker = None
         y, stats, m = res; s = self.state.settings
         self.enhanced = y; self.busy.setRange(0, 1); self.btn_run.setEnabled(True); self.btn_export.setEnabled(True)
         self.wave.show_signals([self.noisy, y], DF_SR, [C["danger"], C["accent"]], ["noisy", "enhanced"])

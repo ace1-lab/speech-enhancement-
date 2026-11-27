@@ -1,7 +1,8 @@
 """Audio loading, validation, resampling, normalization and segmentation."""
+import math
 import numpy as np
 import soundfile as sf
-import librosa
+from scipy import signal
 
 DF_SR = 48000       # DeepFilterNet native rate
 METRIC_SR = 16000   # rate used for PESQ / STOI
@@ -34,7 +35,10 @@ def validate_wav(path):
 def resample(x, sr_in, sr_out):
     if sr_in == sr_out:
         return x.astype(np.float32)
-    return librosa.resample(x.astype(np.float32), orig_sr=sr_in, target_sr=sr_out).astype(np.float32)
+    gcd = math.gcd(int(sr_in), int(sr_out))
+    up = int(sr_out) // gcd
+    down = int(sr_in) // gcd
+    return signal.resample_poly(x.astype(np.float32), up, down).astype(np.float32)
 
 
 def normalize(x, peak=0.95):
